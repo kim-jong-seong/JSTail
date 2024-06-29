@@ -454,6 +454,7 @@ def aboutInfo():
         about_window = tk.Toplevel(root)
         about_window.title("정보")
         about_window.focus_force()
+        about_window.protocol("WM_DELETE_WINDOW", aboutInfo_close)  # about_window 창이 닫힐 때 호출할 함수 설정
         about_window.bind("<Escape>", aboutInfo_close)  # Find 창이 닫힐 때 호출할 함수 설정
 
         # 아이콘 설정
@@ -465,6 +466,12 @@ def aboutInfo():
     else:
         about_window.lift() # 이미 열려 있는 경우에는 해당 창을 화면 제일 앞으로 이동시킵니다.
         about_window.focus_force()  # 창에 포커스를 줍니다.
+
+def aboutInfo_close():
+    global about_window
+
+    about_window.destroy()
+    about_window = None
 
 def aboutInfo_close(event=None):
     global about_window
