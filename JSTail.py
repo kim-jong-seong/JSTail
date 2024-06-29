@@ -3,13 +3,14 @@ import os
 import tkinter as tk
 from tkinter import filedialog, font, simpledialog, messagebox
 
-global initFlag, prev_file_size, find_window, selected_text
+global initFlag, prev_file_size, find_window, selected_text, about_window
 
 initFlag = True
 prev_file_size = 0
 find_window = None  # 초기에는 창이 열려 있지 않음을 나타내기 위해 None으로 설정합니다.
 selected_text = ""
 delPop = None
+about_window = None
 
 # 설정 파일 경로
 config_file = "config.ini"
@@ -232,6 +233,7 @@ def del_pop(event=None):
 
         # Ctrl+Q 단축키 바인딩
         delPop.bind("<Control-q>", del_pop_bindQ)
+        delPop.bind("<Escape>", on_del_pop_close)
 
         if selected_text != "":
             del_text_widget.insert(tk.END, selected_text)
@@ -270,6 +272,11 @@ def on_del_pop_close():
     delPop.destroy()
     delPop = None  # 창이 닫힐 때 참조를 제거하여 다시 열 수 있도록 설정합니다.
 
+def on_del_pop_close(event=None):
+    global delPop
+    delPop.destroy()
+    delPop = None  # 창이 닫힐 때 참조를 제거하여 다시 열 수 있도록 설정합니다.
+
 def find_text():
     global text
     search_term = simpledialog.askstring("Find", "Find :", parent=root)
@@ -301,6 +308,7 @@ def open_find_window():
 
         find_window.geometry(resize)
         find_window.protocol("WM_DELETE_WINDOW", on_find_window_close)  # Find 창이 닫힐 때 호출할 함수 설정
+        find_window.bind("<Escape>", on_find_window_close)
         
         find_label = tk.Label(find_window, text="내용 :")
         find_label.place(x=10, y=10)
@@ -333,6 +341,14 @@ def open_find_window():
         find_entry.focus_force()
 
 def on_find_window_close():
+    global find_window, last_search_pos
+    last_search_pos = None 
+    text.tag_remove("found", "1.0", tk.END)
+
+    find_window.destroy()
+    find_window = None  # 창이 닫힐 때 참조를 제거하여 다시 열 수 있도록 설정합니다.
+
+def on_find_window_close(event=None):
     global find_window, last_search_pos
     last_search_pos = None 
     text.tag_remove("found", "1.0", tk.END)
@@ -426,21 +442,35 @@ def bring_find_window_to_front(event):
         find_window.lift()
 
 def aboutInfo():
-    x_coord = root.winfo_x()
-    y_coord = root.winfo_y()
+    global about_window
 
-    resize = "300x45+" + str(x_coord + 350) + "+" + str(y_coord + 180)
+    if about_window is None:  # about_window가 존재하지 않을 때만 새로운 창을 엽니다.
 
-    about_window = tk.Toplevel(root)
-    about_window.title("정보")
-    about_window.focus_force()
+        x_coord = root.winfo_x()
+        y_coord = root.winfo_y()
 
-    # 아이콘 설정
-    about_window.iconbitmap(icon_path)
-    about_window.geometry(resize)
+        resize = "300x45+" + str(x_coord + 350) + "+" + str(y_coord + 180)
 
-    about_label = tk.Label(about_window, text="ⓒ 2024. JongSeong. All Rights Reserved.\nIcon created by Smashicons.", justify="center")
-    about_label.pack(pady=7)
+        about_window = tk.Toplevel(root)
+        about_window.title("정보")
+        about_window.focus_force()
+        about_window.bind("<Escape>", aboutInfo_close)  # Find 창이 닫힐 때 호출할 함수 설정
+
+        # 아이콘 설정
+        about_window.iconbitmap(icon_path)
+        about_window.geometry(resize)
+
+        about_label = tk.Label(about_window, text="ⓒ 2024. JongSeong. All Rights Reserved.\nIcon created by Smashicons.", justify="center")
+        about_label.pack(pady=7)
+    else:
+        about_window.lift() # 이미 열려 있는 경우에는 해당 창을 화면 제일 앞으로 이동시킵니다.
+        about_window.focus_force()  # 창에 포커스를 줍니다.
+
+def aboutInfo_close(event=None):
+    global about_window
+
+    about_window.destroy()
+    about_window = None
 
 # Tkinter 애플리케이션 생성
 root = tk.Tk()
