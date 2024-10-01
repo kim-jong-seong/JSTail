@@ -1,9 +1,9 @@
 import sys
 import os
 import tkinter as tk
-from tkinter import filedialog, font, simpledialog, messagebox
+from tkinter import ttk, filedialog, font, simpledialog, messagebox, colorchooser
 
-global initFlag, prev_file_size, find_window, selected_text, about_window
+global initFlag, prev_file_size, find_window, selected_text, about_window, highlight_window
 
 initFlag = True
 prev_file_size = 0
@@ -11,6 +11,7 @@ find_window = None  # 초기에는 창이 열려 있지 않음을 나타내기 �
 selected_text = ""
 delPop = None
 about_window = None
+highlight_window = None
 
 # 설정 파일 경로
 config_file = "config.ini"
@@ -74,6 +75,12 @@ def update_tail():
 
                 # 이전 파일 크기 갱신
                 prev_file_size = curr_file_size
+
+                # 키워드와 색상 로드
+                highlights = load_highlights()
+
+                # 키워드 강조하기
+                highlight_keyword(highlights)
 
         except Exception as e:
             print("Error updating tail:", e)
@@ -165,6 +172,7 @@ def popup_menu(event):
     popup_menu.add_command(label="찾기", command=open_find_window, accelerator="        Ctrl+F")
     popup_menu.add_command(label="지우기", command=clear_text, accelerator="        Ctrl+L")
     popup_menu.add_command(label="빈줄 지우기 툴", command=del_pop, accelerator="        Ctrl+Q")
+    popup_menu.add_command(label="하이라이트 툴", command=highlight_pop, accelerator="        Ctrl+H")
     
     font_menu = tk.Menu(popup_menu, tearoff=0)
     popup_menu.add_cascade(label="글꼴", menu=font_menu)
@@ -206,6 +214,9 @@ def del_pop(event=None):
 
         x_coord = root.winfo_x()
         y_coord = root.winfo_y()
+
+        if y_coord < 0 :
+            y_coord = 200
 
         resize = "700x600+" + str(x_coord + 150) + "+" + str(y_coord - 100)
 
@@ -441,6 +452,280 @@ def bring_find_window_to_front(event):
     if find_window and find_window.winfo_exists():  # 서브 창이 존재하는지 확인합니다.
         find_window.lift()
 
+entry_list = []
+
+add_button = None
+
+highlight_window = None  # 하이라이트 창 변수
+tree = None  # Treeview 변수
+keyword_entry = None  # 키워드 입력 변수
+color_entry = None  # 색상 입력 변수
+item_counter = 0  # 각 행의 고유 태그용 카운터
+
+def highlight_window_close(event=None):
+    global highlight_window
+    highlight_window.destroy()
+    highlight_window = None
+
+def add_item():
+    global keyword_entry, color_entry, tree, item_counter
+
+    keyword = keyword_entry.get().strip()
+    color = color_entry.get().strip()
+
+    if keyword and color:
+        # config.ini 파일 읽기
+        try:
+            with open(config_file, 'r', encoding='utf-8') as configfile:
+                lines = configfile.readlines()
+        except FileNotFoundError:
+            lines = []
+
+        # 'highlight =' 라인 찾기
+        config_line_index = None
+        for index, line in enumerate(lines):
+            if line.startswith('highlight ='):
+                config_line_index = index
+                break
+
+        # 기존 config 값을 가져오기
+        current_keywords = []
+        if config_line_index is not None:
+            current_config = lines[config_line_index].strip().split('=')[1].strip()
+            current_keywords = eval(current_config) if current_config else []
+
+        # 중복 키워드 체크
+        if any(keyword in item for item in current_keywords):
+            tk.messagebox.showwarning("입력 오류", "이미 존재하는 키워드입니다.")
+            highlight_window.lift()  # 색상 선택 전 창을 최상위로
+            return  # 함수 종료
+
+        # 새로운 태그 생성
+        tag_name = f"row_{item_counter}"
+        tree.insert('', 'end', values=(keyword, color), tags=(tag_name,))
+
+        # 태그에 색상 적용
+        tree.tag_configure(tag_name, background=color)
+
+        # 새로운 키워드 추가
+        current_keywords.append({keyword: color})
+
+        # 업데이트된 config 값 생성 (한 줄로)
+        new_config_line = f"highlight = {str(current_keywords).replace('}, ', '},')}\n"
+
+        # 파일에 쓰기
+        if config_line_index is not None:
+            lines[config_line_index] = new_config_line  # 기존 라인 업데이트
+        else:
+            lines.append(new_config_line)  # 새로 추가
+
+        with open(config_file, 'w', encoding='utf-8') as configfile:
+            configfile.writelines(lines)
+
+        # 입력 필드 초기화
+        keyword_entry.delete(0, 'end')
+        color_entry.delete(0, 'end')
+
+        item_counter += 1
+
+        # 키워드와 색상 로드
+        highlights = load_highlights()
+
+        # 키워드 강조하기
+        highlight_keyword(highlights)
+    else:
+        # 에러 처리: 키워드와 색상을 모두 입력해야 함
+        tk.messagebox.showwarning("입력 오류", "키워드와 색상을 모두 입력하세요.")
+        highlight_window.lift()  # 색상 선택 전 창을 최상위로
+
+def delete_item():
+    global tree
+    selected_item = tree.selection()
+    
+    if selected_item:
+        # 선택된 항목의 값 가져오기
+        item_values = tree.item(selected_item, 'values')
+        if item_values:
+            keyword_to_delete = item_values[0]  # 키워드 값
+
+            # Treeview에서 항목 삭제
+            tree.delete(selected_item)
+
+            # config.ini 파일 읽기
+            try:
+                with open(config_file, 'r', encoding='utf-8') as configfile:
+                    lines = configfile.readlines()
+            except FileNotFoundError:
+                return
+
+            # 'config =' 라인 찾기
+            config_line_index = None
+            for index, line in enumerate(lines):
+                if line.startswith('highlight ='):
+                    config_line_index = index
+                    break
+
+            # 기존 config 값을 가져오기
+            if config_line_index is not None:
+                current_config = lines[config_line_index].strip().split('=')[1].strip()
+                current_keywords = eval(current_config) if current_config else []
+            else:
+                current_keywords = []
+
+            # 선택된 키워드 삭제
+            current_keywords = [item for item in current_keywords if keyword_to_delete not in item]
+
+            # 업데이트된 config 값 생성 (한 줄로)
+            new_config_line = f"highlight = {str(current_keywords).replace('}, ', '},')}\n"
+
+            # 파일에 쓰기
+            if config_line_index is not None:
+                lines[config_line_index] = new_config_line  # 기존 라인 업데이트
+            else:
+                lines.append(new_config_line)  # 새로 추가
+
+            with open(config_file, 'w', encoding='utf-8') as configfile:
+                configfile.writelines(lines)
+
+        # 키워드와 색상 로드
+        highlights = load_highlights()
+
+        # 키워드 강조하기
+        highlight_keyword(highlights)
+
+def choose_color():
+    global color_entry
+    color_code = colorchooser.askcolor(title="색상 선택")[1]
+    highlight_window.lift()  # 색상 선택 전 창을 최상위로
+    if color_code:
+        color_entry.delete(0, 'end')
+        color_entry.insert(0, color_code)
+        highlight_window.lift()  # 색상 선택 전 창을 최상위로
+
+def clear_treeview_selection(event):
+    global tree, delete_button
+    widget = event.widget
+    if widget != tree and widget != delete_button:  # Treeview 또는 삭제 버튼 외부 클릭 시
+        tree.selection_remove(tree.selection())
+
+def highlight_pop(event=None):
+    global highlight_window, tree, keyword_entry, color_entry, delete_button
+
+    if highlight_window is None:  # highlight_window가 존재하지 않을 때만 새로운 창을 엽니다.
+        highlight_window = tk.Toplevel(root)
+        highlight_window.title("하이라이트 툴")
+        highlight_window.focus_force()
+
+        # 아이콘 설정 (필요시)
+        highlight_window.iconbitmap(icon_path)
+
+        x_coord = root.winfo_x()
+        y_coord = root.winfo_y()
+
+        if y_coord < 0:
+            y_coord = 150
+
+        resize = "267x400+" + str(x_coord + 350) + "+" + str(y_coord - 0)
+        highlight_window.geometry(resize)
+        highlight_window.protocol("WM_DELETE_WINDOW", highlight_window_close)  # 창이 닫힐 때 호출할 함수 설정
+        highlight_window.bind("<Escape>", highlight_window_close)
+
+        # 표를 표시할 Treeview 생성
+        columns = ('키워드')
+        tree = ttk.Treeview(highlight_window, columns=columns, show='headings')
+        tree.heading('키워드', text='키워드')
+        tree.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # 추가 및 삭제 버튼
+        button_frame = tk.Frame(highlight_window)
+        button_frame.pack(fill='x', pady=1)
+
+        # Treeview 외부 클릭 시 선택 해제
+        highlight_window.bind("<Button-1>", clear_treeview_selection)
+
+        add_button = tk.Button(button_frame, text="추가", command=add_item)
+        add_button.grid(row=0, column=0, sticky='ew', padx=10)  # 같은 비율로 채우기 위해 grid 사용
+
+        delete_button = tk.Button(button_frame, text="삭제", command=delete_item)
+        delete_button.grid(row=0, column=1, sticky='ew', padx=10)  # 같은 비율로 채우기 위해 grid 사용
+
+        # 버튼의 비율을 맞추기 위해 column weight 설정
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
+
+
+        # 색상과 키워드 입력란
+        input_frame = tk.Frame(highlight_window)
+        input_frame.pack(fill='x', pady=5, padx=5)
+
+        # 색상 선택 필드
+        tk.Label(input_frame, text="색상:").grid(row=0, column=0, sticky='e', padx=5, pady=5)
+        color_entry = tk.Entry(input_frame)
+        color_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+
+        # 색상 선택 버튼
+        color_button = tk.Button(input_frame, text="선택", command=choose_color)
+        color_button.grid(row=0, column=2, padx=5, pady=5)
+
+        # 키워드 입력 필드
+        tk.Label(input_frame, text="키워드:").grid(row=1, column=0, sticky='e', padx=5, pady=5)
+        keyword_entry = tk.Entry(input_frame)
+        keyword_entry.grid(row=1, column=1, columnspan=2, padx=5, pady=5, sticky='ew')
+
+        # config.ini의 highlight 값 읽기 및 Treeview에 추가
+        try:
+            with open('config.ini', 'r', encoding='utf-8') as configfile:
+                lines = configfile.readlines()
+                for line in lines:
+                    if line.startswith('highlight ='):
+                        highlight_values = eval(line.split('=')[1].strip())
+                        for item in highlight_values:
+                            keyword = list(item.keys())[0]
+                            color = item[keyword]
+                            tree.insert('', 'end', values=(keyword, color))  # Treeview에 추가
+                            # 태그 생성 및 색상 적용
+                            tag_name = f"tag_{keyword}"
+                            tree.tag_configure(tag_name, background=color)
+                            tree.item(tree.get_children()[-1], tags=(tag_name,))  # 마지막 추가한 항목에 태그 적용
+        except (FileNotFoundError, SyntaxError, NameError) as e:
+            print("Error reading config file:", e)
+
+    else:
+        highlight_window.lift()  # 이미 열려 있는 경우에는 해당 창을 화면 제일 앞으로 이동시킵니다.
+        highlight_window.focus_force()  # 창에 포커스를 줍니다.
+
+import ast
+
+def load_highlights():
+    with open('config.ini', 'r', encoding='utf-8') as file:
+        for line in file:
+            if line.startswith("highlight"):
+                # '=' 다음 부분을 잘라내고 공백 제거
+                highlights_str = line.split('=', 1)[1].strip()
+                break
+
+    # 문자열을 Python 객체로 변환
+    highlights = ast.literal_eval(highlights_str)
+
+    # 키워드와 색상으로 변환
+    return [(list(item)[0], list(item.values())[0]) for item in highlights]
+
+def highlight_keyword(keywords):
+    for keyword, color in keywords:
+        # 태그 설정
+        tag_name = f"highlight_{keyword}"
+        text.tag_configure(tag_name, background=color)
+        
+        # 텍스트에서 키워드를 찾고 강조
+        start_index = 1.0
+        while True:
+            start_index = text.search(keyword, start_index, stopindex=tk.END)
+            if not start_index:
+                break
+            end_index = f"{start_index}+{len(keyword)}c"
+            text.tag_add(tag_name, start_index, end_index)
+            start_index = end_index  # 다음 검색을 위해 인덱스 이동
+
 def aboutInfo():
     global about_window
 
@@ -521,6 +806,9 @@ root.bind("<Control-l>", clear_text)
 
 # Ctrl+Q 단축키 바인딩
 root.bind("<Control-q>", del_pop)
+
+# Ctrl+H 단축키 바인딩
+root.bind("<Control-h>", highlight_pop)
 
 # 텍스트에서 드래그 인식 이벤트
 text.bind("<<Selection>>", on_selection_changed)
