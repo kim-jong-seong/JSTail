@@ -542,6 +542,8 @@ def add_item():
 def delete_item():
     global tree
     selected_item = tree.selection()
+
+    clear_all_tags()
     
     if selected_item:
         # 선택된 항목의 값 가져오기
@@ -710,6 +712,14 @@ def load_highlights():
 
     # 키워드와 색상으로 변환
     return [(list(item)[0], list(item.values())[0]) for item in highlights]
+
+# 모든 태그를 초기화하는 함수
+def clear_all_tags():
+    global text
+    # text 위젯에 설정된 모든 태그 이름 가져오기
+    for tag in text.tag_names():
+        # 각 태그 삭제
+        text.tag_delete(tag)
 
 def highlight_keyword(keywords):
     for keyword, color in keywords:
