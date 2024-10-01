@@ -171,8 +171,9 @@ def popup_menu(event):
 
     popup_menu.add_command(label="찾기", command=open_find_window, accelerator="        Ctrl+F")
     popup_menu.add_command(label="지우기", command=clear_text, accelerator="        Ctrl+L")
-    popup_menu.add_command(label="빈줄 지우기 툴", command=del_pop, accelerator="        Ctrl+Q")
-    popup_menu.add_command(label="하이라이트 툴", command=highlight_pop, accelerator="        Ctrl+H")
+    popup_menu.add_command(label="빈줄 지우기", command=del_pop, accelerator="        Ctrl+Q")
+    popup_menu.add_command(label="하이라이트", command=highlight_pop, accelerator="        Ctrl+H")
+    popup_menu.add_command(label="배경색", command=change_bg_color, accelerator="        Ctrl+B")
     
     font_menu = tk.Menu(popup_menu, tearoff=0)
     popup_menu.add_cascade(label="글꼴", menu=font_menu)
@@ -674,7 +675,7 @@ def highlight_pop(event=None):
 
         # config.ini의 highlight 값 읽기 및 Treeview에 추가
         try:
-            with open('config.ini', 'r', encoding='utf-8') as configfile:
+            with open(config_file, 'r', encoding='utf-8') as configfile:
                 lines = configfile.readlines()
                 for line in lines:
                     if line.startswith('highlight ='):
@@ -697,7 +698,7 @@ def highlight_pop(event=None):
 import ast
 
 def load_highlights():
-    with open('config.ini', 'r', encoding='utf-8') as file:
+    with open(config_file, 'r', encoding='utf-8') as file:
         for line in file:
             if line.startswith("highlight"):
                 # '=' 다음 부분을 잘라내고 공백 제거
@@ -725,6 +726,43 @@ def highlight_keyword(keywords):
             end_index = f"{start_index}+{len(keyword)}c"
             text.tag_add(tag_name, start_index, end_index)
             start_index = end_index  # 다음 검색을 위해 인덱스 이동
+
+def change_bg_color(event=None):
+    # 색상 선택 대화 상자 열기
+    color = colorchooser.askcolor(initialcolor=load_background_color())[1]  # 선택한 색상의 Hex 코드
+    if color:
+        text.configure(background=color)
+        save_background_color(color)
+
+# 설정을 저장하는 함수 (섹션 없이 background_color 만 저장)
+def save_background_color(color):
+    with open(config_file, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+
+    # config.ini에 background_color가 이미 존재하는지 확인
+    with open(config_file, 'w', encoding='utf-8') as file:
+        found = False
+        for line in lines:
+            if line.startswith('background_color'):
+                file.write(f'background_color = {color}\n')
+                found = True
+            else:
+                file.write(line)
+        
+        # background_color가 없으면 추가
+        if not found:
+            file.write(f'background_color = {color}\n')
+
+# 설정된 배경색을 로드하는 함수
+def load_background_color():
+    try:
+        with open(config_file, 'r', encoding='utf-8') as file:
+            for line in file:
+                if line.startswith('background_color'):
+                    return line.split('=', 1)[1].strip()
+    except FileNotFoundError:
+        # 파일이 없으면 기본값 흰색 반환
+        return '#FFFFFF'
 
 def aboutInfo():
     global about_window
@@ -786,7 +824,7 @@ text_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
 text_scrollbar_x = tk.Scrollbar(text_frame, orient=tk.HORIZONTAL)
 text_scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
 
-text = tk.Text(text_frame, yscrollcommand=text_scrollbar_y.set, xscrollcommand=text_scrollbar_x.set, wrap="none")
+text = tk.Text(text_frame, yscrollcommand=text_scrollbar_y.set, xscrollcommand=text_scrollbar_x.set, wrap="none", background=load_background_color())
 text.pack(expand=True, fill=tk.BOTH)
 
 text_scrollbar_y.config(command=text.yview)
@@ -809,6 +847,9 @@ root.bind("<Control-q>", del_pop)
 
 # Ctrl+H 단축키 바인딩
 root.bind("<Control-h>", highlight_pop)
+
+# Ctrl+B 단축키 바인딩
+root.bind("<Control-b>", change_bg_color)
 
 # 텍스트에서 드래그 인식 이벤트
 text.bind("<<Selection>>", on_selection_changed)
