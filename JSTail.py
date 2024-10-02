@@ -207,7 +207,7 @@ def del_pop(event=None):
 
     if delPop is None:  # delPop가 존재하지 않을 때만 새로운 창을 엽니다.
         delPop = tk.Toplevel(root)
-        delPop.title("빈줄 지우기 툴")
+        delPop.title("빈줄 지우기")
         delPop.focus_force()
 
         # 아이콘 설정
@@ -543,9 +543,10 @@ def delete_item():
     global tree
     selected_item = tree.selection()
 
-    clear_all_tags()
-    
     if selected_item:
+        # 태그 모두 지우기
+        clear_all_tags()
+
         # 선택된 항목의 값 가져오기
         item_values = tree.item(selected_item, 'values')
         if item_values:
@@ -616,7 +617,7 @@ def highlight_pop(event=None):
 
     if highlight_window is None:  # highlight_window가 존재하지 않을 때만 새로운 창을 엽니다.
         highlight_window = tk.Toplevel(root)
-        highlight_window.title("하이라이트 툴")
+        highlight_window.title("하이라이트")
         highlight_window.focus_force()
 
         # 아이콘 설정 (필요시)
