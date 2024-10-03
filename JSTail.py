@@ -213,13 +213,16 @@ def del_pop(event=None):
         # 아이콘 설정
         delPop.iconbitmap(icon_path)
 
+        popupWidth = 700
+        popupHeight = 600
+
         x_coord = root.winfo_x()
         y_coord = root.winfo_y()
 
-        if y_coord < 0 :
-            y_coord = 200
+        root_width = root.winfo_width()
+        root_height = root.winfo_height()
 
-        resize = "700x600+" + str(x_coord + 150) + "+" + str(y_coord - 100)
+        resize = str(popupWidth) + "x" + str(popupHeight) + "+" + str(round(x_coord + (root_width / 2) - (popupWidth / 2))) + "+" + str(round(y_coord + (root_height / 2) - (popupHeight / 2)))
 
         delPop.geometry(resize)
         delPop.protocol("WM_DELETE_WINDOW", on_del_pop_close)  # Find 창이 닫힐 때 호출할 함수 설정
@@ -313,14 +316,21 @@ def open_find_window():
         # 아이콘 설정
         find_window.iconbitmap(icon_path)
 
+        popupWidth = 235
+        popupHeight = 75
+
         x_coord = root.winfo_x()
         y_coord = root.winfo_y()
 
-        resize = "235x75+" + str(x_coord + 218) + "+" + str(y_coord + 108)
+        root_width = root.winfo_width()
+        root_height = root.winfo_height()
+
+        resize = str(popupWidth) + "x" + str(popupHeight) + "+" + str(round(x_coord + (root_width / 2) - (popupWidth / 2))) + "+" + str(round(y_coord + (root_height / 2) - (popupHeight / 2)))
 
         find_window.geometry(resize)
         find_window.protocol("WM_DELETE_WINDOW", on_find_window_close)  # Find 창이 닫힐 때 호출할 함수 설정
         find_window.bind("<Escape>", on_find_window_close)
+        find_window.resizable(False, False)
         
         find_label = tk.Label(find_window, text="내용 :")
         find_label.place(x=10, y=10)
@@ -623,16 +633,20 @@ def highlight_pop(event=None):
         # 아이콘 설정 (필요시)
         highlight_window.iconbitmap(icon_path)
 
+        popupWidth = 267
+        popupHeight = 400
+
         x_coord = root.winfo_x()
         y_coord = root.winfo_y()
 
-        if y_coord < 0:
-            y_coord = 150
+        root_width = root.winfo_width()
+        root_height = root.winfo_height()
 
-        resize = "267x400+" + str(x_coord + 350) + "+" + str(y_coord - 0)
+        resize = str(popupWidth) + "x" + str(popupHeight) + "+" + str(round(x_coord + (root_width / 2) - (popupWidth / 2))) + "+" + str(round(y_coord + (root_height / 2) - (popupHeight / 2)))
         highlight_window.geometry(resize)
         highlight_window.protocol("WM_DELETE_WINDOW", highlight_window_close)  # 창이 닫힐 때 호출할 함수 설정
         highlight_window.bind("<Escape>", highlight_window_close)
+        highlight_window.resizable(False, False)
 
         # 표를 표시할 Treeview 생성
         columns = ('키워드')
@@ -642,16 +656,16 @@ def highlight_pop(event=None):
 
         # 추가 및 삭제 버튼
         button_frame = tk.Frame(highlight_window)
-        button_frame.pack(fill='x', pady=1)
+        button_frame.pack(fill='x', pady=1, padx=5)
 
         # Treeview 외부 클릭 시 선택 해제
         highlight_window.bind("<Button-1>", clear_treeview_selection)
 
         add_button = tk.Button(button_frame, text="추가", command=add_item)
-        add_button.grid(row=0, column=0, sticky='ew', padx=10)  # 같은 비율로 채우기 위해 grid 사용
+        add_button.grid(row=0, column=0, sticky='ew', padx=5)  # 같은 비율로 채우기 위해 grid 사용
 
         delete_button = tk.Button(button_frame, text="삭제", command=delete_item)
-        delete_button.grid(row=0, column=1, sticky='ew', padx=10)  # 같은 비율로 채우기 위해 grid 사용
+        delete_button.grid(row=0, column=1, sticky='ew', padx=5)  # 같은 비율로 채우기 위해 grid 사용
 
         # 버튼의 비율을 맞추기 위해 column weight 설정
         button_frame.grid_columnconfigure(0, weight=1)
@@ -780,16 +794,23 @@ def aboutInfo():
 
     if about_window is None:  # about_window가 존재하지 않을 때만 새로운 창을 엽니다.
 
+        popupWidth = 300
+        popupHeight = 45
+
         x_coord = root.winfo_x()
         y_coord = root.winfo_y()
 
-        resize = "300x45+" + str(x_coord + 350) + "+" + str(y_coord + 180)
+        root_width = root.winfo_width()
+        root_height = root.winfo_height()
+
+        resize = str(popupWidth) + "x" + str(popupHeight) + "+" + str(round(x_coord + (root_width / 2) - (popupWidth / 2))) + "+" + str(round(y_coord + (root_height / 2) - (popupHeight / 2)))
 
         about_window = tk.Toplevel(root)
         about_window.title("정보")
         about_window.focus_force()
         about_window.protocol("WM_DELETE_WINDOW", aboutInfo_close)  # about_window 창이 닫힐 때 호출할 함수 설정
         about_window.bind("<Escape>", aboutInfo_close)  # Find 창이 닫힐 때 호출할 함수 설정
+        about_window.resizable(False, False)
 
         # 아이콘 설정
         about_window.iconbitmap(icon_path)
