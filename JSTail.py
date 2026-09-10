@@ -81,6 +81,23 @@ MARKER_BG, MARKER_FG = "#2F3A45", "#FFE9A8"
 # 최근 파일 목록에 보관할 개수
 RECENT_MAX = 5
 
+# 배경색 창
+bg_window = None
+bg_tree = None
+bg_color_entry = None
+bg_color_swatch = None
+bg_name_entry = None
+bg_delete_button = None
+
+# 처음 실행 시 넣어둘 기본 배경색 (전부 파스텔톤)
+DEFAULT_BG_COLORS = [
+    {"연하늘": "#E3F2FD"},
+    {"민트": "#E0F2F1"},
+    {"크림": "#FFF8E1"},
+    {"연분홍": "#FCE4EC"},
+    {"라벤더": "#EDE7F6"},
+]
+
 # 화면에 유지할 최대 줄 수 - 넘으면 오래된 줄부터 지웁니다.
 # 위젯이 계속 커지면 메모리도 늘고 하이라이트도 느려지기 때문입니다.
 # (config.ini 의 max_lines 로 바꿀 수 있습니다. 0 이면 제한 없음)
@@ -858,14 +875,12 @@ def load_topmost():
     return False
 
 def ensure_config():
-    """설정 파일이 없으면 기본값으로 하나 만들어 둡니다.
+    """설정 파일에서 빠진 항목을 기본값으로 채웁니다.
 
-    exe 만 받아서 처음 실행한 경우입니다. 항목이 일부만 든 파일이 남으면
-    다음 실행 때 빠진 항목이 기본값으로 되돌아가므로 처음부터 전부 적어 둡니다.
+    파일이 아예 없으면 새로 만들고, 예전 버전에서 쓰던 파일이라 나중에 생긴
+    항목이 빠져 있으면 그것만 더합니다. 이미 있는 값은 건드리지 않습니다.
     """
-    if os.path.exists(config_file):
-        return
-    save_config_values({
+    defaults = {
         "last_file_path": "",
         "last_font": DEFAULT_FONT,
         "last_size": 10,
@@ -875,14 +890,27 @@ def ensure_config():
         "recent_files": [],
         "encoding": ENCODING_AUTO,
         "max_lines": DEFAULT_MAX_LINES,
-    })
+        "bg_colors": str(DEFAULT_BG_COLORS).replace("}, ", "},"),
+    }
+
+    existing = set()
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            for line in f:
+                existing.add(line.split("=", 1)[0].strip())
+    except OSError:
+        pass  # 파일이 없으면 전부 새로 넣습니다
+
+    missing = {key: value for key, value in defaults.items() if key not in existing}
+    if missing:
+        save_config_values(missing)
 
 # ------------------------- 설정 내보내기/가져오기 -------------------------
 
 # 가져온 파일이 JSTail 설정이 맞는지 확인할 때 쓰는 항목들
 KNOWN_KEYS = ("last_file_path", "last_font", "last_size", "highlight",
               "background_color", "always_on_top", "recent_files",
-              "encoding", "max_lines")
+              "encoding", "max_lines", "bg_colors")
 
 def export_settings():
     """지금 설정을 파일 하나로 저장합니다."""
@@ -1657,12 +1685,221 @@ def highlight_keyword(keywords, start="1.0"):
             text.tag_add(tag_name, start_index, end_index)
             start_index = end_index  # 다음 검색을 위해 인덱스 이동
 
-def change_bg_color(event=None):
-    # 색상 선택 대화 상자 열기
-    color = colorchooser.askcolor(initialcolor=load_background_color())[1]  # 선택한 색상의 Hex 코드
+def load_bg_colors():
+    """저장해둔 배경색 목록을 [{이름: 색상}, ...] 으로 읽어옵니다."""
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.split("=", 1)[0].strip() == "bg_colors":
+                    # 하이라이트와 같은 형식이라 같은 파서를 씁니다
+                    return parse_highlights(line.split("=", 1)[1])
+    except OSError as e:
+        print("Error reading config file:", e)
+    return []
+
+def save_bg_colors(items):
+    """배경색 목록을 config.ini 에 한 줄로 저장합니다."""
+    save_config_values({"bg_colors": str(items).replace("}, ", "},")})
+
+def bg_set_color_value(color):
+    """색상 입력칸에 값을 넣고 옆 미리보기 칸도 함께 갱신합니다."""
+    bg_color_entry.delete(0, "end")
     if color:
+        bg_color_entry.insert(0, color)
+    bg_update_swatch()
+
+def bg_update_swatch(event=None):
+    """입력된 색상 코드를 오른쪽 미리보기 칸에 칠합니다."""
+    if bg_color_swatch is None:
+        return
+    try:
+        bg_color_swatch.configure(background=bg_color_entry.get().strip())
+    except tk.TclError:
+        bg_color_swatch.configure(background=EMPTY_SWATCH_BG)
+
+def bg_choose_color(event=None):
+    """미리보기 칸을 누르면 Windows 색 선택 창을 엽니다."""
+    current = bg_color_entry.get().strip() or load_background_color()
+    try:
+        picked = colorchooser.askcolor(initialcolor=current, title="배경색 선택",
+                                       parent=bg_window)[1]
+    except tk.TclError:
+        picked = colorchooser.askcolor(title="배경색 선택", parent=bg_window)[1]
+    bg_window.lift()
+    if picked:
+        bg_set_color_value(picked)
+
+def bg_apply():
+    """입력칸에 있는 색을 배경색으로 적용합니다."""
+    color = bg_color_entry.get().strip()
+    if not color:
+        messagebox.showwarning("입력 오류", "색상을 입력하거나 목록에서 고르세요.")
+        bg_window.lift()
+        return
+    try:
         text.configure(background=color)
-        save_background_color(color)
+    except tk.TclError:
+        messagebox.showwarning("입력 오류", "색상 코드가 올바르지 않습니다.")
+        bg_window.lift()
+        return
+    save_background_color(color)
+    paint_jump_button()  # 버튼/안내창 배경도 새 색에 맞춥니다
+
+def bg_add_item():
+    """입력칸의 이름과 색상을 목록에 저장합니다."""
+    name = bg_name_entry.get().strip()
+    color = bg_color_entry.get().strip()
+    if not name or not color:
+        messagebox.showwarning("입력 오류", "이름과 색상을 모두 입력하세요.")
+        bg_window.lift()
+        return
+    try:
+        bg_color_swatch.configure(background=color)
+    except tk.TclError:
+        messagebox.showwarning("입력 오류", "색상 코드가 올바르지 않습니다.")
+        bg_window.lift()
+        return
+
+    items = load_bg_colors()
+    if any(name in item for item in items):
+        messagebox.showwarning("입력 오류", "이미 존재하는 이름입니다.")
+        bg_window.lift()
+        return
+
+    items.append({name: color})
+    save_bg_colors(items)
+    fill_bg_tree()
+    bg_name_entry.delete(0, "end")
+
+def bg_delete_item():
+    """목록에서 선택한 색을 지웁니다."""
+    selected = bg_tree.selection()
+    if not selected:
+        return
+    values = bg_tree.item(selected, "values")
+    if not values:
+        return
+    name = values[0]
+    save_bg_colors([item for item in load_bg_colors() if name not in item])
+    fill_bg_tree()
+
+def fill_bg_tree():
+    """목록을 다시 채웁니다. 각 행의 배경을 그 색으로 칠합니다."""
+    bg_tree.delete(*bg_tree.get_children())
+    for item in load_bg_colors():
+        if not isinstance(item, dict) or not item:
+            continue
+        name, color = next(iter(item.items()))
+        tag = "bg_%s" % name
+        bg_tree.insert("", "end", values=(name, color), tags=(tag,))
+        try:
+            bg_tree.tag_configure(tag, background=color)
+        except tk.TclError:
+            pass  # 색상 코드가 깨져 있으면 기본 배경으로 둡니다
+
+def on_bg_tree_select(event=None):
+    """목록에서 고른 색을 색상 입력칸으로 옮겨옵니다. (이름은 건드리지 않습니다)"""
+    selected = bg_tree.selection()
+    if not selected:
+        return
+    values = bg_tree.item(selected, "values")
+    if len(values) >= 2:
+        bg_set_color_value(values[1])
+
+def on_bg_click(event):
+    """빈 곳을 누르면 목록 선택과 입력 포커스를 해제합니다."""
+    widget = event.widget
+    if widget is bg_tree:
+        if not bg_tree.identify_row(event.y):
+            bg_tree.selection_remove(bg_tree.selection())
+    elif widget is not bg_delete_button:
+        bg_tree.selection_remove(bg_tree.selection())
+
+    if widget is not bg_color_entry and widget is not bg_name_entry:
+        bg_window.focus_set()
+
+def bg_window_close(event=None):
+    global bg_window
+    bg_window.destroy()
+    bg_window = None
+
+def change_bg_color(event=None):
+    """배경색 창을 엽니다. (Ctrl+B)"""
+    global bg_window, bg_tree, bg_color_entry, bg_color_swatch
+    global bg_name_entry, bg_delete_button
+
+    if bg_window is not None:
+        bg_window.lift()
+        bg_window.focus_force()
+        return
+
+    bg_window = tk.Toplevel(root)
+    bg_window.title("배경색")
+    bg_window.focus_force()
+    bg_window.iconbitmap(icon_path)
+
+    popupWidth, popupHeight = 267, 400
+    x_coord, y_coord = root.winfo_x(), root.winfo_y()
+    root_width, root_height = root.winfo_width(), root.winfo_height()
+    bg_window.geometry("%dx%d+%d+%d" % (
+        popupWidth, popupHeight,
+        round(x_coord + (root_width / 2) - (popupWidth / 2)),
+        round(y_coord + (root_height / 2) - (popupHeight / 2))))
+    bg_window.protocol("WM_DELETE_WINDOW", bg_window_close)
+    bg_window.bind("<Escape>", bg_window_close)
+    bg_window.resizable(False, False)
+
+    # 저장해둔 색 목록
+    columns = ("이름", "색상")
+    bg_tree = ttk.Treeview(bg_window, columns=columns, show="headings")
+    bg_tree.heading("이름", text="이름")
+    bg_tree.heading("색상", text="색상")
+    bg_tree.column("이름", width=140)
+    bg_tree.column("색상", width=90)
+    bg_tree.pack(fill="both", expand=True, padx=10, pady=10)
+    bg_tree.bind("<<TreeviewSelect>>", on_bg_tree_select)
+
+    bg_window.bind("<Button-1>", on_bg_click)
+
+    # 적용 버튼 - 추가/삭제 두 버튼을 합친 너비로 윗줄에 놓습니다
+    apply_frame = tk.Frame(bg_window)
+    apply_frame.pack(fill="x", pady=(0, 2), padx=5)
+    apply_button = tk.Button(apply_frame, text="적용", command=bg_apply)
+    apply_button.pack(fill="x", padx=5)
+
+    button_frame = tk.Frame(bg_window)
+    button_frame.pack(fill="x", pady=1, padx=5)
+    tk.Button(button_frame, text="추가", command=bg_add_item).grid(
+        row=0, column=0, sticky="ew", padx=5)
+    bg_delete_button = tk.Button(button_frame, text="삭제", command=bg_delete_item)
+    bg_delete_button.grid(row=0, column=1, sticky="ew", padx=5)
+    button_frame.grid_columnconfigure(0, weight=1)
+    button_frame.grid_columnconfigure(1, weight=1)
+
+    # 색상 / 이름 입력란
+    input_frame = tk.Frame(bg_window)
+    input_frame.pack(fill="x", pady=5, padx=5)
+    input_frame.grid_columnconfigure(1, weight=1, uniform="cell")
+    input_frame.grid_columnconfigure(2, weight=1, uniform="cell")
+
+    tk.Label(input_frame, text="색상:").grid(row=0, column=0, sticky="e", padx=5, pady=5)
+    bg_color_entry = tk.Entry(input_frame, width=6)
+    bg_color_entry.grid(row=0, column=1, sticky="nsew", padx=3, pady=5)
+    bg_color_entry.bind("<KeyRelease>", bg_update_swatch)
+    bg_color_entry.bind("<Return>", lambda e: bg_apply())
+
+    # 미리보기 칸 - 누르면 Windows 색 선택 창이 열립니다
+    bg_color_swatch = tk.Frame(input_frame, background=EMPTY_SWATCH_BG,
+                               relief="sunken", bd=1, cursor="hand2")
+    bg_color_swatch.grid(row=0, column=2, sticky="nsew", padx=3, pady=5)
+    bg_color_swatch.bind("<Button-1>", bg_choose_color)
+
+    tk.Label(input_frame, text="이름:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
+    bg_name_entry = tk.Entry(input_frame)
+    bg_name_entry.grid(row=1, column=1, columnspan=2, padx=3, pady=5, sticky="ew")
+
+    fill_bg_tree()
+    bg_set_color_value(load_background_color())  # 지금 배경색을 채워둡니다
 
 # 설정을 저장하는 함수 (섹션 없이 background_color 만 저장)
 def save_background_color(color):
