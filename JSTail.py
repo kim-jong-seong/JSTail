@@ -6,6 +6,7 @@ import colorsys
 import ctypes
 import datetime
 import random
+import re
 import shutil
 import tkinter as tk
 from tkinter import ttk, filedialog, font, messagebox, colorchooser
@@ -76,6 +77,7 @@ MAX_READ_BYTES = 1024 * 1024
 
 # 구분선(Ctrl+D) 모양
 MARKER_TAG = "marker"
+MARKER_MARK = "lastmarker"  # 마지막으로 이동한 구분선 위치
 MARKER_BG, MARKER_FG = "#2F3A45", "#FFE9A8"
 
 # 최근 파일 목록에 보관할 개수
@@ -108,6 +110,19 @@ highlight_cache = None
 
 # 제목 표시줄을 숨겼을 때 Alt+드래그로 창을 옮기기 위한 기준점
 drag_origin = None
+
+# 창 위치/크기를 저장하기까지 기다리는 시간(ms)
+# 창을 끄는 동안 계속 저장하지 않도록 잠잠해진 뒤에 한 번만 씁니다.
+GEOMETRY_SAVE_DELAY = 1000
+geometry_job = None
+
+# 구분선을 다시 그리기까지 기다리는 시간(ms)
+MARKER_REDRAW_DELAY = 300
+marker_redraw_job = None
+
+# 화면 전체(모니터 여러 대 포함) 범위를 알아내는 값
+SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
+SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 
 # 제목 표시줄 숨김에 쓰는 Windows 창 스타일 값
 # overrideredirect() 를 쓰면 Windows 가 이 창을 "도구창"으로 취급해서
@@ -418,12 +433,14 @@ def change_font(font_name):
     size = load_last_size()
     text.config(font=(font_name, size))
     save_last_font(font_name, size)
+    schedule_marker_redraw()  # 글자 폭이 바뀌면 구분선 길이도 달라집니다
 
 def change_size(size):
     global text
     font_name = load_last_font()
     text.config(font=(font_name, size))
     save_last_font(font_name, size)
+    schedule_marker_redraw()
 
 def update_title():
     global file_path, root
@@ -451,6 +468,7 @@ def popup_menu(event):
 
     popup_menu.add_command(label="찾기", command=open_find_window, accelerator="        Ctrl+F")
     popup_menu.add_command(label="구분선 넣기", command=insert_marker, accelerator="        Ctrl+D")
+    popup_menu.add_command(label="다음 구분선", command=next_marker, accelerator="        F2")
     popup_menu.add_command(label="지우기", command=clear_text, accelerator="        Ctrl+L")
     popup_menu.add_command(label="빈줄 지우기", command=del_pop, accelerator="        Ctrl+Q")
     popup_menu.add_command(label="하이라이트", command=highlight_pop, accelerator="        Ctrl+H")
@@ -813,6 +831,86 @@ def hide_toast():
 
 # ------------------------- 구분선 -------------------------
 
+def marker_line(stamp):
+    """창 폭에 맞춘 구분선 문자열을 만듭니다.
+
+    글자 "개수" 가 아니라 "픽셀" 로 계산해야 합니다. 고정폭 글꼴이라도 ━ 는
+    한글처럼 두 칸을 차지해서 시각 글자와 폭이 다르기 때문입니다.
+    (개수로 빼면 그 차이만큼 오른쪽이 비어 보입니다)
+    """
+    label = "  %s  " % stamp
+    try:
+        metric = font.Font(font=text.cget("font"))
+        bar_w = metric.measure("━") or 8
+        label_w = metric.measure(label)
+        # 테두리(borderwidth)와 좌우 여백(padx)을 양쪽에서 뺀 값이 실제 폭입니다
+        inset = 2 * (int(text.cget("borderwidth")) + int(text.cget("padx")))
+        usable = text.winfo_width() - inset
+    except tk.TclError:
+        metric = None
+        bar_w, label_w, usable = 8, len(label) * 8, 480
+
+    if usable < 100:  # 아직 창이 그려지기 전이면 적당한 기본값
+        usable = 480
+
+    count = max(4, int((usable - label_w) // bar_w))
+    left = count // 2
+    line = "━" * left + label + "━" * (count - left)
+
+    # ━ 를 하나 더 넣기엔 모자란 자투리는 빈칸으로 채웁니다.
+    # 글자는 보이지 않지만 배경색이 이어져서 막대가 오른쪽 끝까지 닿습니다.
+    space_w = metric.measure(" ") if metric is not None else 0
+    if space_w:
+        leftover = usable - (label_w + count * bar_w)
+        line += " " * int(max(0, leftover) // space_w)
+    return line
+
+def marker_stamp(start, end):
+    """구분선 줄에서 시각 부분만 뽑아냅니다."""
+    # 끝쪽 빈칸 때문에 ━ 가 양끝에 오지 않을 수 있어 둘을 함께 떼어냅니다
+    return text.get(start, end).strip("━ 	")
+
+def redraw_markers():
+    """창 크기나 글꼴이 바뀌었을 때 구분선 길이를 다시 맞춥니다.
+
+    구분선은 넣는 순간 그냥 글자로 굳기 때문에, 나중에 창을 넓히면
+    오른쪽이 비어 보입니다. 그래서 다시 그려 줍니다.
+
+    줄바꿈 문자는 건드리지 않고 줄 안쪽 내용만 교체하므로 줄 수가 그대로입니다.
+    (줄 수가 바뀌면 다른 구분선 위치와 태그가 모두 어긋납니다)
+    """
+    global marker_redraw_job
+    marker_redraw_job = None
+    positions = marker_positions()
+    if not positions:
+        return
+
+    was_bottom = at_bottom()
+    first = text.yview()[0]  # 보던 위치
+
+    text.config(state=tk.NORMAL)
+    for pos in positions:
+        start = text.index("%s linestart" % pos)
+        end = text.index("%s lineend" % pos)
+        stamp = marker_stamp(start, end)
+        if not stamp:
+            continue
+        text.delete(start, end)
+        text.insert(start, marker_line(stamp), MARKER_TAG)
+    text.config(state=tk.DISABLED)
+
+    if was_bottom:
+        text.see(tk.END)
+    else:
+        text.yview_moveto(first)
+
+def schedule_marker_redraw():
+    """잠잠해진 뒤에 한 번만 다시 그리도록 예약합니다."""
+    global marker_redraw_job
+    if marker_redraw_job is not None:
+        root.after_cancel(marker_redraw_job)
+    marker_redraw_job = root.after(MARKER_REDRAW_DELAY, redraw_markers)
+
 def insert_marker(event=None):
     """지금 위치에 시각이 찍힌 구분선을 넣습니다. (Ctrl+D)
 
@@ -820,16 +918,7 @@ def insert_marker(event=None):
     그 아래부터가 방금 발생한 로그입니다.
     """
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    label = "  %s  " % stamp
-
-    # 창 폭에 맞춰 선 길이를 정합니다.
-    try:
-        char_w = font.Font(font=text.cget("font")).measure("━") or 8
-        cols = max(24, (text.winfo_width() - 8) // char_w)
-    except tk.TclError:
-        cols = 60
-    fill = max(4, cols - len(label))
-    line = "━" * (fill // 2) + label + "━" * (fill - fill // 2)
+    line = marker_line(stamp)
 
     text.config(state=tk.NORMAL)
     if text.index("end-1c") != "1.0":
@@ -845,6 +934,57 @@ def insert_marker(event=None):
                        spacing1=6, spacing3=6)
     jump_to_bottom()
     return "break"
+
+def marker_positions():
+    """화면에 있는 구분선들의 위치를 위에서부터 차례로 돌려줍니다."""
+    ranges = text.tag_ranges(MARKER_TAG)
+    return [str(ranges[i]) for i in range(0, len(ranges), 2)]
+
+def goto_marker(forward=True):
+    """다음/이전 구분선으로 갑니다.
+
+    번호를 따로 세지 않고 매번 위치로 찾기 때문에, 구분선을 더 넣거나
+    오래된 줄이 잘려나가도 항상 맞습니다.
+    """
+    markers = marker_positions()
+    if not markers:
+        show_toast("구분선이 없습니다.   Ctrl+D 로 넣을 수 있습니다")
+        return "break"
+
+    # 기준점 정하기
+    # 직전에 이동한 구분선이 아직 화면에 보이면 그 구분선을 기준으로 삼습니다.
+    # (맨 아래쪽 구분선은 화면 맨 위로 올릴 수 없어서 화면 위치만으로는 어긋납니다)
+    # 사용자가 다른 곳으로 스크롤했으면 화면 맨 위를 기준으로 삼습니다.
+    here = None
+    if MARKER_MARK in text.mark_names():
+        spot = text.index(MARKER_MARK)
+        if text.bbox(spot):  # 그 구분선이 아직 화면에 보이는가
+            here = spot
+    if here is None:
+        here = text.index("@0,0")
+
+    if forward:
+        target = next((i for i, m in enumerate(markers)
+                       if text.compare(m, ">", here)), 0)  # 없으면 처음으로
+    else:
+        earlier = [i for i, m in enumerate(markers) if text.compare(m, "<", here)]
+        target = earlier[-1] if earlier else len(markers) - 1  # 없으면 마지막으로
+
+    text.mark_set(MARKER_MARK, markers[target])  # 글이 밀려도 따라다닙니다
+    text.mark_gravity(MARKER_MARK, "left")
+    text.see(markers[target])
+    text.yview(markers[target])  # 구분선을 화면 맨 위에 둡니다
+    update_follow_state()
+    show_toast("구분선  %d / %d" % (target + 1, len(markers)))
+    return "break"
+
+def next_marker(event=None):
+    """F2 - 다음 구분선"""
+    return goto_marker(True)
+
+def prev_marker(event=None):
+    """Shift+F2 - 이전 구분선"""
+    return goto_marker(False)
 
 # ------------------------- 항상 위 -------------------------
 
@@ -891,6 +1031,8 @@ def ensure_config():
         "encoding": ENCODING_AUTO,
         "max_lines": DEFAULT_MAX_LINES,
         "bg_colors": str(DEFAULT_BG_COLORS).replace("}, ", "},"),
+        "geometry": "1000x400+500+500",
+        "maximized": 0,
     }
 
     existing = set()
@@ -910,7 +1052,7 @@ def ensure_config():
 # 가져온 파일이 JSTail 설정이 맞는지 확인할 때 쓰는 항목들
 KNOWN_KEYS = ("last_file_path", "last_font", "last_size", "highlight",
               "background_color", "always_on_top", "recent_files",
-              "encoding", "max_lines", "bg_colors")
+              "encoding", "max_lines", "bg_colors", "geometry", "maximized")
 
 def export_settings():
     """지금 설정을 파일 하나로 저장합니다."""
@@ -1016,6 +1158,88 @@ def change_encoding():
     if name == ENCODING_AUTO:
         name = "%s (%s)" % (ENCODING_AUTO, log_encoding)
     show_toast("인코딩: %s   지금부터 다시 읽습니다" % name)
+
+# ------------------------- 창 위치/크기 -------------------------
+
+def load_geometry():
+    """저장해둔 창 위치/크기를 읽어옵니다. 없으면 빈 문자열."""
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.split("=", 1)[0].strip() == "geometry":
+                    return line.split("=", 1)[1].strip()
+    return ""
+
+def load_maximized():
+    """최대화된 상태로 껐는지 읽어옵니다."""
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.split("=", 1)[0].strip() == "maximized":
+                    return line.split("=", 1)[1].strip() in ("1", "True", "true")
+    return False
+
+def geometry_on_screen(geometry):
+    """저장된 위치가 지금 화면 안에 있는지 확인합니다.
+
+    모니터를 빼거나 배치를 바꾸면 예전 위치가 화면 밖일 수 있습니다.
+    그대로 띄우면 창을 찾을 수 없으므로 미리 걸러냅니다.
+    """
+    match = re.match(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$", geometry or "")
+    if not match:
+        return False
+    width, height, x, y = (int(v) for v in match.groups())
+    if width < 200 or height < 100:
+        return False
+    try:
+        metrics = ctypes.windll.user32.GetSystemMetrics
+        left, top = metrics(SM_XVIRTUALSCREEN), metrics(SM_YVIRTUALSCREEN)
+        right = left + metrics(SM_CXVIRTUALSCREEN)
+        bottom = top + metrics(SM_CYVIRTUALSCREEN)
+    except (AttributeError, OSError):
+        left, top = 0, 0
+        right, bottom = root.winfo_screenwidth(), root.winfo_screenheight()
+
+    # 제목 표시줄을 잡을 수 있을 만큼은 화면 안에 들어와 있어야 합니다
+    return (x + width - 80 > left and x + 80 < right
+            and y + 40 > top and y + 40 < bottom)
+
+def save_geometry():
+    """지금 창 위치/크기를 저장합니다."""
+    global geometry_job
+    geometry_job = None
+    try:
+        maximized = root.state() == "zoomed"
+    except tk.TclError:
+        return
+
+    values = {"maximized": 1 if maximized else 0}
+    if not maximized:  # 최대화 상태의 크기는 저장하지 않습니다
+        values["geometry"] = root.winfo_geometry()
+    save_config_values(values)
+
+def on_window_configure(event):
+    """창을 옮기거나 크기를 바꾸면 잠시 뒤에 저장합니다."""
+    global geometry_job, marker_redraw_job
+    if event.widget is not root:
+        return  # 안에 든 위젯들의 변화는 무시합니다
+    if geometry_job is not None:
+        root.after_cancel(geometry_job)
+    geometry_job = root.after(GEOMETRY_SAVE_DELAY, save_geometry)
+    schedule_marker_redraw()  # 넓어진 만큼 구분선도 다시 그립니다
+
+def restore_geometry():
+    """저장해둔 위치/크기로 창을 되돌립니다."""
+    saved = load_geometry()
+    if saved and geometry_on_screen(saved):
+        root.geometry(saved)
+    else:
+        root.geometry("1000x400+500+500")  # 처음이거나 화면 밖이면 기본 위치
+    if load_maximized():
+        try:
+            root.state("zoomed")
+        except tk.TclError:
+            pass
 
 # ------------------------- 제목 표시줄 -------------------------
 
@@ -1979,7 +2203,7 @@ except Exception as e:
     print("Drag and drop unavailable:", e)
     root = tk.Tk()
 root.title("JS Tail")
-root.geometry("1000x400+500+500")  # 창 크기 설정
+restore_geometry()  # 지난번에 쓰던 위치/크기로
 
 # 처음 실행이면 설정 파일을 기본값으로 만들어 둡니다.
 ensure_config()
@@ -2081,6 +2305,10 @@ root.bind("<Alt-ButtonRelease-1>", end_window_drag)
 root.bind("<F3>", find_next)
 root.bind("<Shift-F3>", find_prev)
 
+# F2 / Shift+F2 (구분선 다음/이전)
+root.bind("<F2>", next_marker)
+root.bind("<Shift-F2>", prev_marker)
+
 # 텍스트에서 드래그 인식 이벤트
 text.bind("<<Selection>>", on_selection_changed)
 
@@ -2088,6 +2316,9 @@ root.bind("<Button-1>", bring_find_window_to_front)
 
 # 화면에 유지할 최대 줄 수
 max_lines = load_max_lines()
+
+# 창을 옮기거나 크기를 바꾸면 저장해 둡니다
+root.bind("<Configure>", on_window_configure)
 
 # 초기 파일 경로
 file_path = load_last_file()
