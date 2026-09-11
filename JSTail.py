@@ -337,6 +337,9 @@ def update_tail():
                 highlight_keyword(highlights,
                                   "%s-%dc" % (mark, back) if back else mark)
 
+                # 찾아둔 검색어도 새 구간까지 이어서 표시합니다.
+                find_in_new_text(mark)
+
                 # 너무 길어지면 오래된 줄부터 잘라냅니다.
                 trim_buffer()
 
@@ -466,9 +469,14 @@ def popup_menu(event):
 
     popup_menu.add_separator()
 
-    popup_menu.add_command(label="찾기", command=open_find_window, accelerator="        Ctrl+F")
-    popup_menu.add_command(label="구분선 넣기", command=insert_marker, accelerator="        Ctrl+D")
+    # 구분선 - 넣기와 앞뒤 이동을 한 묶음으로 봅니다.
+    popup_menu.add_command(label="구분선 추가", command=insert_marker, accelerator="        Ctrl+D")
+    popup_menu.add_command(label="이전 구분선", command=prev_marker, accelerator="        Shift+F2")
     popup_menu.add_command(label="다음 구분선", command=next_marker, accelerator="        F2")
+
+    popup_menu.add_separator()
+
+    popup_menu.add_command(label="찾기", command=open_find_window, accelerator="        Ctrl+F")
     popup_menu.add_command(label="지우기", command=clear_text, accelerator="        Ctrl+L")
     popup_menu.add_command(label="빈줄 지우기", command=del_pop, accelerator="        Ctrl+Q")
     popup_menu.add_command(label="하이라이트", command=highlight_pop, accelerator="        Ctrl+H")
@@ -477,7 +485,9 @@ def popup_menu(event):
                                command=apply_topmost, accelerator="        Ctrl+T")
     popup_menu.add_checkbutton(label="제목 표시줄 숨기기", variable=title_hidden,
                                command=apply_title_bar, accelerator="        Ctrl+E")
-    
+
+    popup_menu.add_separator()
+
     font_menu = tk.Menu(popup_menu, tearoff=0)
     popup_menu.add_cascade(label="글꼴", menu=font_menu)
     selected_font.set(load_last_font())  # 이전에 선택된 폰트에 체크 표시
@@ -638,10 +648,10 @@ def open_find_window():
         find_entry.place(x=45, y=12)
         find_entry.focus_force()
 
-        find_entry.bind("<Return>", lambda event: find_text_external(find_entry.get()))
+        find_entry.bind("<Return>", run_find)
         find_entry.bind("<Shift-Return>", find_prev)
-        
-        find_button = tk.Button(find_window, text="검색", command=lambda: find_text_external(find_entry.get()))
+
+        find_button = tk.Button(find_window, text="검색", command=run_find)
         find_button.place(x=191, y=8)
         find_button.config(state='disabled')
         find_entry.bind("<KeyRelease>", on_entry_changed)
@@ -649,13 +659,18 @@ def open_find_window():
         direction = tk.IntVar()
         match = tk.IntVar()
 
-        find_radio_up = tk.Radiobutton(find_window, text="위로", variable=direction, value=0)
+        # 바꾸면 바로 다시 찾습니다. command 가 없으면 검색을 다시 누를 때까지
+        # 예전 조건으로 모아둔 결과 위에서 F3 이 움직이게 됩니다.
+        find_radio_up = tk.Radiobutton(find_window, text="위로", variable=direction,
+                                       value=0, command=on_find_option_changed)
         find_radio_up.place(x=25, y=40)
 
-        find_radio_down = tk.Radiobutton(find_window, text="아래로", variable=direction, value=1)
+        find_radio_down = tk.Radiobutton(find_window, text="아래로", variable=direction,
+                                         value=1, command=on_find_option_changed)
         find_radio_down.place(x=75, y=40)
 
-        find_checkbox_match = tk.Checkbutton(find_window, text="매치", variable=match)
+        find_checkbox_match = tk.Checkbutton(find_window, text="매치", variable=match,
+                                             command=on_find_option_changed)
         find_checkbox_match.place(x=150, y=40)
 
         # 결과 개수 + 다음/이전 안내
@@ -666,27 +681,33 @@ def open_find_window():
 
         find_window.bind("<F3>", find_next)
         find_window.bind("<Shift-F3>", find_prev)
+
+        prefill_find_entry()  # 로그창에서 드래그해 둔 문자열을 검색어로 채웁니다
     else:
         find_window.lift()  # 이미 열려 있는 경우에는 해당 창을 화면 제일 앞으로 이동시킵니다.
         find_window.focus_force()  # Find 창에 포커스를 줍니다.
         find_entry.focus_force()
+        prefill_find_entry()  # 새로 드래그한 문자열로 다시 채웁니다.
 
 def on_find_window_close(event=None):
-    global find_window, find_matches, find_pos, find_term, find_status
-    find_matches = []
-    find_pos = -1
+    global find_window, find_term, find_case, find_status, find_entry
     find_term = ""
+    find_case = False
     find_status = None
+    find_entry = None
     text.tag_remove("found", "1.0", tk.END)
     text.tag_remove("found_all", "1.0", tk.END)
 
     find_window.destroy()
     find_window = None  # 창이 닫힐 때 참조를 제거하여 다시 열 수 있도록 설정합니다.
 
-find_matches = []      # 검색어와 일치하는 모든 위치
-find_pos = -1          # 그중 지금 보고 있는 번째
+# 일치 위치를 줄 번호로 들고 있으면 오래된 줄이 잘려나갈 때(trim_buffer)
+# 아래쪽 줄 번호가 전부 밀려서 엉뚱한 곳을 가리키게 됩니다. 그래서 위치는
+# 따로 저장하지 않고, 글자를 따라 움직이는 태그에서 그때그때 읽어옵니다.
 find_term = ""         # 마지막으로 검색한 문자열
+find_case = False      # 그때 "매치"(대소문자 구분)가 켜져 있었는지
 find_status = None     # "3 / 27" 을 보여주는 라벨
+find_entry = None      # 검색어 입력칸 (창을 연 적이 없으면 None)
 
 def on_entry_changed(event):
     global find_entry, find_button
@@ -696,92 +717,235 @@ def on_entry_changed(event):
     else:
         find_button.config(state='disabled')
 
+def index_key(index):
+    """'12.5' 같은 위치를 (줄, 칸) 숫자로 바꿉니다.
+
+    text.compare() 는 한 번 부를 때마다 Tcl 을 거치므로 일치 항목이 많으면
+    비교만으로도 느려집니다. 숫자로 바꿔 파이썬에서 비교합니다.
+    """
+    line, _, column = str(index).partition(".")
+    try:
+        return int(line), int(column)
+    except ValueError:
+        return 0, 0
+
+def match_list():
+    """지금 남아 있는 일치 항목을 [(시작, 끝), ...] 로 돌려줍니다.
+
+    found_all 태그는 글자를 따라 움직이므로, 로그가 쌓여 위쪽이 잘려나가도
+    남은 항목들은 항상 제자리를 가리킵니다.
+    """
+    ranges = text.tag_ranges("found_all")
+    return [(str(ranges[i]), str(ranges[i + 1]))
+            for i in range(0, len(ranges), 2)]
+
+def current_match_index(matches):
+    """지금 보고 있는 항목이 목록에서 몇 번째인지 돌려줍니다. 없으면 -1."""
+    current = text.tag_ranges("found")
+    if not current:
+        return -1
+    key = index_key(current[0])
+    for i, (start, _) in enumerate(matches):
+        if index_key(start) == key:
+            return i
+    return -1  # 보고 있던 항목이 잘려나간 경우
+
+def nearest_match_index(matches, forward):
+    """화면 맨 위를 기준으로 다음(또는 이전) 항목의 번호를 고릅니다.
+
+    기준을 커서(INSERT)로 잡으면 안 됩니다. 커서는 로그가 붙을 때마다 끝으로
+    따라가 버려서 "위로" 가 언제나 마지막 항목만 가리키게 됩니다.
+    구분선 이동(goto_marker)과 같은 기준(화면 맨 위)을 씁니다.
+    """
+    here = index_key(text.index("@0,0"))
+    if forward:
+        return next((i for i, (start, _) in enumerate(matches)
+                     if index_key(start) >= here), 0)  # 없으면 처음으로
+    earlier = [i for i, (start, _) in enumerate(matches)
+               if index_key(start) < here]
+    return earlier[-1] if earlier else len(matches) - 1  # 없으면 마지막으로
 
 def collect_matches(search_term):
     """검색어와 일치하는 위치를 모두 찾아 전부 연하게 표시합니다."""
-    global find_matches, find_pos, find_term
+    global find_term, find_case
 
     text.tag_remove("found_all", "1.0", tk.END)
     text.tag_remove("found", "1.0", tk.END)
-    find_matches = []
-    find_pos = -1
     find_term = search_term
+    find_case = bool(match.get())
     if not search_term:
+        update_find_status()
         return
 
-    nocase = not match.get()  # "매치" 를 끄면 대소문자를 무시합니다.
+    nocase = not find_case  # "매치" 를 끄면 대소문자를 무시합니다.
     index = "1.0"
     while True:
         index = text.search(search_term, index, stopindex=tk.END, nocase=nocase)
         if not index:
             break
         end = f"{index}+{len(search_term)}c"
-        find_matches.append(index)
         text.tag_add("found_all", index, end)
         index = end
 
     text.tag_configure("found_all", background=FOUND_ALL_BG)
     text.tag_configure("found", background=FOUND_CUR_BG)
+    # 하이라이트 태그보다 위에 있어야 검색 표시가 가려지지 않습니다.
+    # (하이라이트를 추가/삭제하면 그 태그들이 나중에 다시 만들어져 위로 올라갑니다)
+    text.tag_raise("found_all")
     text.tag_raise("found")  # 현재 항목이 항상 위에 보이도록
+
+def find_in_new_text(mark):
+    """새로 붙은 구간에서도 검색어를 찾아 표시합니다.
+
+    한 번 찾아둔 뒤에 들어온 로그가 빠지면 개수(3 / 27)가 실제와 달라지고
+    F3 으로도 갈 수 없습니다.
+    """
+    if not find_term:
+        return
+
+    # 검색어가 조각 경계에 걸쳐 있을 수 있어 조금 앞에서부터 봅니다.
+    back = len(find_term) - 1
+    index = "%s-%dc" % (mark, back) if back else mark
+    nocase = not find_case
+    found = False
+    while True:
+        index = text.search(find_term, index, stopindex=tk.END, nocase=nocase)
+        if not index:
+            break
+        end = "%s+%dc" % (index, len(find_term))
+        text.tag_add("found_all", index, end)
+        index = end
+        found = True
+    if found:
+        update_find_status()
 
 def show_match(position):
     """position 번째 일치 항목으로 이동해 진하게 표시합니다."""
-    global find_pos
+    matches = match_list()
     text.tag_remove("found", "1.0", tk.END)
-    if not find_matches:
+    if not matches:
         update_find_status()
         return
 
-    find_pos = position % len(find_matches)  # 끝까지 가면 처음으로 돌아옵니다
-    index = find_matches[find_pos]
-    text.tag_add("found", index, f"{index}+{len(find_term)}c")
-    text.see(index)
+    start, end = matches[position % len(matches)]  # 끝까지 가면 처음으로
+    text.tag_add("found", start, end)
+    text.see(start)
     update_find_status()
 
 def update_find_status():
     """"3 / 27" 처럼 몇 번째인지 표시합니다."""
-    if find_status is None:
+    if find_status is None or not find_status.winfo_exists():
         return
     if not find_term:
         find_status.config(text="")
-    elif not find_matches:
+        return
+
+    matches = match_list()
+    if not matches:
         find_status.config(text="없음", foreground="#C0392B")
+        return
+
+    here = current_match_index(matches)
+    if here < 0:  # 보고 있던 항목이 잘려나갔으면 개수만 보여줍니다
+        find_status.config(text="%d 개" % len(matches), foreground="#333333")
     else:
-        find_status.config(text="%d / %d" % (find_pos + 1, len(find_matches)),
+        find_status.config(text="%d / %d" % (here + 1, len(matches)),
                            foreground="#333333")
 
-def find_text_external(search_term):
-    """검색 버튼 / Enter - 전체를 다시 찾고 방향에 맞는 첫 항목으로 갑니다."""
+def step_match(step):
+    """다음(step=1) 또는 이전(step=-1) 일치 항목으로 갑니다."""
+    matches = match_list()
+    if not matches:
+        # 아직 찾은 것이 없으면 입력칸에 적힌 내용으로 한 번 찾아봅니다.
+        if find_entry is not None and find_entry.winfo_exists() and find_entry.get():
+            run_find()
+        return "break"
+
+    here = current_match_index(matches)
+    if here < 0:
+        # 보고 있던 항목이 잘려나갔으면 화면 위치를 기준으로 다시 잡습니다.
+        show_match(nearest_match_index(matches, step > 0))
+    else:
+        show_match(here + step)
+    return "break"
+
+def run_find(event=None):
+    """검색 버튼 / Enter - 방향에 맞는 항목으로 갑니다.
+
+    조건이 그대로면 다시 모으지 않고 다음 항목으로 넘어갑니다. 누를 때마다
+    처음부터 다시 모으면 몇 번을 눌러도 같은 자리에 머물기 때문입니다.
+    """
+    if find_entry is None or not find_entry.winfo_exists():
+        return "break"
+
+    search_term = find_entry.get()
+    forward = direction.get() == 1
+    same = (search_term and search_term == find_term
+            and bool(match.get()) == find_case and match_list())
+    if same:
+        return step_match(1 if forward else -1)
+
     collect_matches(search_term)
-    if not find_matches:
+    matches = match_list()
+    if matches:
+        show_match(nearest_match_index(matches, forward))
+    else:
+        update_find_status()
+    return "break"
+
+def on_find_option_changed(event=None):
+    """위로/아래로/매치를 바꾸면 그 자리에서 바로 반영합니다.
+
+    보고 있던 자리가 새 조건에서도 일치하면 그대로 지키고,
+    아니면 화면 위치를 기준으로 다시 잡습니다.
+    """
+    if find_entry is None or not find_entry.winfo_exists() or not find_entry.get():
+        return
+
+    current = text.tag_ranges("found")
+    anchor = index_key(current[0]) if current else None
+
+    collect_matches(find_entry.get())
+    matches = match_list()
+    if not matches:
         update_find_status()
         return
 
-    if direction.get() == 0:  # 위로 - 현재 위치보다 앞의 마지막 항목
-        here = text.index(tk.INSERT)
-        target = len(find_matches) - 1
-        for i, index in enumerate(find_matches):
-            if text.compare(index, ">=", here):
-                target = i - 1
-                break
-    else:  # 아래로 - 맨 앞부터
-        target = 0
+    target = None
+    if anchor is not None:
+        target = next((i for i, (start, _) in enumerate(matches)
+                       if index_key(start) == anchor), None)
+    if target is None:
+        target = nearest_match_index(matches, direction.get() == 1)
     show_match(target)
+
+def prefill_find_entry():
+    """로그창에서 드래그한 문자열을 검색어 칸에 미리 채웁니다. (Ctrl+F)
+
+    여러 줄을 드래그했으면 검색어로 쓸 수 있는 첫 줄만 씁니다.
+    바로 덮어쓸 수 있도록 채운 내용을 선택해 둡니다.
+    """
+    keyword = ""
+    for line in selected_text.splitlines():
+        if line.strip():
+            keyword = line.strip()
+            break
+
+    if keyword:
+        find_entry.delete(0, "end")
+        find_entry.insert(0, keyword)
+        find_entry.select_range(0, "end")
+        find_entry.icursor("end")
+    find_button.config(state="normal" if find_entry.get() else "disabled")
 
 def find_next(event=None):
     """F3 - 다음 항목"""
-    if find_matches:
-        show_match(find_pos + 1)
-    elif find_entry is not None and find_entry.winfo_exists():
-        find_text_external(find_entry.get())
-    return "break"
+    return step_match(1)
 
 def find_prev(event=None):
     """Shift+F3 - 이전 항목"""
-    if find_matches:
-        show_match(find_pos - 1)
-    return "break"
-                
+    return step_match(-1)
+
 # ------------------------- 안내창 -------------------------
 
 def build_toast(parent):
@@ -933,6 +1097,7 @@ def insert_marker(event=None):
     text.tag_configure(MARKER_TAG, background=MARKER_BG, foreground=MARKER_FG,
                        spacing1=6, spacing3=6)
     jump_to_bottom()
+    show_toast("구분선을 넣었습니다.   F2 다음 / Shift+F2 이전")
     return "break"
 
 def marker_positions():
@@ -1908,6 +2073,13 @@ def highlight_keyword(keywords, start="1.0"):
             end_index = f"{start_index}+{len(keyword)}c"
             text.tag_add(tag_name, start_index, end_index)
             start_index = end_index  # 다음 검색을 위해 인덱스 이동
+
+    # 태그는 나중에 만들어진 것이 위에 그려집니다. 하이라이트를 추가/삭제하면
+    # highlight_ 태그들이 다시 만들어지면서 검색 표시를 덮어버리므로,
+    # 찾는 중이라면 검색 표시를 다시 맨 위로 올려줍니다.
+    if find_term:
+        text.tag_raise("found_all")
+        text.tag_raise("found")
 
 def load_bg_colors():
     """저장해둔 배경색 목록을 [{이름: 색상}, ...] 으로 읽어옵니다."""
