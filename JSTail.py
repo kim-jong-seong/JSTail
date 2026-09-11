@@ -1689,6 +1689,12 @@ color_entry = None  # 색상 입력 변수
 color_swatch = None  # 입력한 색을 보여주는 칸 (클릭하면 색상 선택창)
 item_counter = 0  # 각 행의 고유 태그용 카운터
 
+def select_all_rows(event=None):
+    """목록에 있는 행을 모두 고릅니다. (Ctrl+A)"""
+    tree_widget = event.widget
+    tree_widget.selection_set(tree_widget.get_children())
+    return "break"  # Entry 쪽 기본 동작과 섞이지 않게 합니다
+
 def highlight_window_close(event=None):
     global highlight_window
     highlight_window.destroy()
@@ -1741,29 +1747,35 @@ def add_item():
         highlight_window.lift()  # 색상 선택 전 창을 최상위로
 
 def delete_item():
+    """목록에서 고른 키워드를 지웁니다. (Ctrl/Shift 로 여러 개 고를 수 있습니다)"""
     global tree
-    selected_item = tree.selection()
+    selected_items = tree.selection()
+    if not selected_items:
+        return
 
-    if selected_item:
-        # 태그 모두 지우기
-        clear_all_tags()
-
-        # 선택된 항목의 값 가져오기
-        item_values = tree.item(selected_item, 'values')
+    # 지울 키워드를 먼저 모읍니다.
+    keywords_to_delete = set()
+    for item_id in selected_items:
+        item_values = tree.item(item_id, 'values')
         if item_values:
-            keyword_to_delete = item_values[0]  # 키워드 값
+            keywords_to_delete.add(item_values[0])
+    if not keywords_to_delete:
+        return
 
-            # Treeview에서 항목 삭제
-            tree.delete(selected_item)
+    # 태그 모두 지우기
+    clear_all_tags()
 
-            # 선택된 키워드 삭제
-            current_keywords = [item for item in load_highlight_items()
-                                if keyword_to_delete not in item]
-            save_highlight_items(current_keywords)
+    # Treeview에서 항목 삭제
+    tree.delete(*selected_items)
 
-        # 키워드가 바뀌었으니 캐시를 버리고 전체를 다시 강조합니다.
-        invalidate_highlights()
-        highlight_keyword(get_highlights())
+    # 선택된 키워드 삭제
+    current_keywords = [item for item in load_highlight_items()
+                        if not any(keyword in item for keyword in keywords_to_delete)]
+    save_highlight_items(current_keywords)
+
+    # 키워드가 바뀌었으니 캐시를 버리고 전체를 다시 강조합니다.
+    invalidate_highlights()
+    highlight_keyword(get_highlights())
 
 def set_color_value(color):
     """색상 입력란에 값을 넣고 옆 미리보기 칸도 함께 갱신합니다."""
@@ -1844,9 +1856,13 @@ def highlight_pop(event=None):
 
         # 표를 표시할 Treeview 생성
         columns = ('키워드')
-        tree = ttk.Treeview(highlight_window, columns=columns, show='headings')
+        tree = ttk.Treeview(highlight_window, columns=columns, show='headings',
+                            selectmode='extended')  # Ctrl/Shift 로 여러 개 선택
         tree.heading('키워드', text='키워드')
         tree.pack(fill='both', expand=True, padx=10, pady=10)
+        tree.bind("<Delete>", lambda e: delete_item())
+        tree.bind("<Control-a>", select_all_rows)
+        tree.bind("<Control-A>", select_all_rows)
 
         # 추가 및 삭제 버튼
         button_frame = tk.Frame(highlight_window)
@@ -2201,15 +2217,21 @@ def bg_add_item():
     bg_name_entry.delete(0, "end")
 
 def bg_delete_item():
-    """목록에서 선택한 색을 지웁니다."""
+    """목록에서 선택한 색을 지웁니다. (Ctrl/Shift 로 여러 개 고를 수 있습니다)"""
     selected = bg_tree.selection()
     if not selected:
         return
-    values = bg_tree.item(selected, "values")
-    if not values:
+
+    names = set()
+    for item_id in selected:
+        values = bg_tree.item(item_id, "values")
+        if values:
+            names.add(values[0])
+    if not names:
         return
-    name = values[0]
-    save_bg_colors([item for item in load_bg_colors() if name not in item])
+
+    save_bg_colors([item for item in load_bg_colors()
+                    if not any(name in item for name in names)])
     fill_bg_tree()
 
 def fill_bg_tree():
@@ -2227,11 +2249,14 @@ def fill_bg_tree():
             pass  # 색상 코드가 깨져 있으면 기본 배경으로 둡니다
 
 def on_bg_tree_select(event=None):
-    """목록에서 고른 색을 색상 입력칸으로 옮겨옵니다. (이름은 건드리지 않습니다)"""
+    """목록에서 고른 색을 색상 입력칸으로 옮겨옵니다. (이름은 건드리지 않습니다)
+
+    여러 개를 골랐을 때는 어느 색을 쓸지 알 수 없으니 입력칸을 그대로 둡니다.
+    """
     selected = bg_tree.selection()
-    if not selected:
+    if len(selected) != 1:
         return
-    values = bg_tree.item(selected, "values")
+    values = bg_tree.item(selected[0], "values")
     if len(values) >= 2:
         bg_set_color_value(values[1])
 
@@ -2281,13 +2306,17 @@ def change_bg_color(event=None):
 
     # 저장해둔 색 목록
     columns = ("이름", "색상")
-    bg_tree = ttk.Treeview(bg_window, columns=columns, show="headings")
+    bg_tree = ttk.Treeview(bg_window, columns=columns, show="headings",
+                           selectmode="extended")  # Ctrl/Shift 로 여러 개 선택
     bg_tree.heading("이름", text="이름")
     bg_tree.heading("색상", text="색상")
     bg_tree.column("이름", width=140)
     bg_tree.column("색상", width=90)
     bg_tree.pack(fill="both", expand=True, padx=10, pady=10)
     bg_tree.bind("<<TreeviewSelect>>", on_bg_tree_select)
+    bg_tree.bind("<Delete>", lambda e: bg_delete_item())
+    bg_tree.bind("<Control-a>", select_all_rows)
+    bg_tree.bind("<Control-A>", select_all_rows)
 
     bg_window.bind("<Button-1>", on_bg_click)
 
