@@ -534,6 +534,7 @@ def del_pop(event=None):
 
     if delPop is None:  # delPop가 존재하지 않을 때만 새로운 창을 엽니다.
         delPop = tk.Toplevel(root)
+        attach_popup(delPop)
         delPop.title("빈줄 지우기")
         delPop.focus_force()
 
@@ -619,6 +620,7 @@ def open_find_window():
 
     if not find_window:  # find_window가 존재하지 않을 때만 새로운 창을 엽니다.
         find_window = tk.Toplevel(root)
+        attach_popup(find_window)
         find_window.title("찾기")
         find_window.lift()
 
@@ -1153,9 +1155,29 @@ def prev_marker(event=None):
 
 # ------------------------- 항상 위 -------------------------
 
+def attach_popup(window):
+    """팝업 창을 로그 창에 딸린 보조 창으로 만듭니다.
+
+    "항상 위"(Ctrl+T)를 켜면 로그 창만 Windows 의 최상위 묶음으로 올라갑니다.
+    lift() 는 같은 묶음 안에서만 순서를 바꾸므로, 팝업은 아무리 올려도 로그 창
+    아래에 깔립니다. 포커스는 정상으로 가기 때문에 보이지도 않는 창에
+    타이핑하게 됩니다. 그래서 팝업도 같은 묶음으로 함께 올려줍니다.
+    """
+    window.transient(root)  # 로그 창 위에 머무르는 보조 창
+    window.attributes("-topmost", bool(always_on_top.get()))
+
+def popup_windows():
+    """지금 열려 있는 팝업 창들을 돌려줍니다."""
+    return [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]
+
 def apply_topmost():
     """현재 설정을 창에 적용하고 config.ini 에 저장합니다."""
-    root.attributes("-topmost", bool(always_on_top.get()))
+    on = bool(always_on_top.get())
+    root.attributes("-topmost", on)
+    # 이미 열려 있던 팝업도 함께 올려야 합니다. 로그 창만 올리면 바꾸는
+    # 순간 떠 있던 찾기 창 같은 것이 그대로 뒤로 깔립니다.
+    for window in popup_windows():
+        window.attributes("-topmost", on)
     save_config_values({"always_on_top": 1 if always_on_top.get() else 0})
 
 def toggle_topmost(event=None):
@@ -1272,7 +1294,10 @@ def apply_all_settings():
     selected_size.set(str(load_last_size()))
 
     always_on_top.set(load_topmost())
-    root.attributes("-topmost", bool(always_on_top.get()))
+    on = bool(always_on_top.get())
+    root.attributes("-topmost", on)
+    for window in popup_windows():
+        window.attributes("-topmost", on)
 
     encoding_choice.set(load_encoding_choice())
     resolve_log_encoding()
@@ -1681,7 +1706,8 @@ def add_item():
 
         # 중복 키워드 체크
         if any(keyword in item for item in current_keywords):
-            tk.messagebox.showwarning("입력 오류", "이미 존재하는 키워드입니다.")
+            tk.messagebox.showwarning("입력 오류", "이미 존재하는 키워드입니다.",
+                                      parent=highlight_window)
             highlight_window.lift()  # 색상 선택 전 창을 최상위로
             return  # 함수 종료
 
@@ -1710,7 +1736,8 @@ def add_item():
         highlight_keyword(get_highlights())
     else:
         # 에러 처리: 키워드와 색상을 모두 입력해야 함
-        tk.messagebox.showwarning("입력 오류", "키워드와 색상을 모두 입력하세요.")
+        tk.messagebox.showwarning("입력 오류", "키워드와 색상을 모두 입력하세요.",
+                                  parent=highlight_window)
         highlight_window.lift()  # 색상 선택 전 창을 최상위로
 
 def delete_item():
@@ -1793,6 +1820,7 @@ def highlight_pop(event=None):
 
     if highlight_window is None:  # highlight_window가 존재하지 않을 때만 새로운 창을 엽니다.
         highlight_window = tk.Toplevel(root)
+        attach_popup(highlight_window)
         highlight_window.title("하이라이트")
         highlight_window.focus_force()
 
@@ -2129,13 +2157,15 @@ def bg_apply():
     """입력칸에 있는 색을 배경색으로 적용합니다."""
     color = bg_color_entry.get().strip()
     if not color:
-        messagebox.showwarning("입력 오류", "색상을 입력하거나 목록에서 고르세요.")
+        messagebox.showwarning("입력 오류", "색상을 입력하거나 목록에서 고르세요.",
+                               parent=bg_window)
         bg_window.lift()
         return
     try:
         text.configure(background=color)
     except tk.TclError:
-        messagebox.showwarning("입력 오류", "색상 코드가 올바르지 않습니다.")
+        messagebox.showwarning("입력 오류", "색상 코드가 올바르지 않습니다.",
+                               parent=bg_window)
         bg_window.lift()
         return
     save_background_color(color)
@@ -2146,19 +2176,22 @@ def bg_add_item():
     name = bg_name_entry.get().strip()
     color = bg_color_entry.get().strip()
     if not name or not color:
-        messagebox.showwarning("입력 오류", "이름과 색상을 모두 입력하세요.")
+        messagebox.showwarning("입력 오류", "이름과 색상을 모두 입력하세요.",
+                               parent=bg_window)
         bg_window.lift()
         return
     try:
         bg_color_swatch.configure(background=color)
     except tk.TclError:
-        messagebox.showwarning("입력 오류", "색상 코드가 올바르지 않습니다.")
+        messagebox.showwarning("입력 오류", "색상 코드가 올바르지 않습니다.",
+                               parent=bg_window)
         bg_window.lift()
         return
 
     items = load_bg_colors()
     if any(name in item for item in items):
-        messagebox.showwarning("입력 오류", "이미 존재하는 이름입니다.")
+        messagebox.showwarning("입력 오류", "이미 존재하는 이름입니다.",
+                               parent=bg_window)
         bg_window.lift()
         return
 
@@ -2230,6 +2263,7 @@ def change_bg_color(event=None):
         return
 
     bg_window = tk.Toplevel(root)
+    attach_popup(bg_window)
     bg_window.title("배경색")
     bg_window.focus_force()
     bg_window.iconbitmap(icon_path)
@@ -2336,6 +2370,7 @@ def aboutInfo():
         resize = str(popupWidth) + "x" + str(popupHeight) + "+" + str(round(x_coord + (root_width / 2) - (popupWidth / 2))) + "+" + str(round(y_coord + (root_height / 2) - (popupHeight / 2)))
 
         about_window = tk.Toplevel(root)
+        attach_popup(about_window)
         about_window.title("정보")
         about_window.focus_force()
         about_window.protocol("WM_DELETE_WINDOW", aboutInfo_close)  # about_window 창이 닫힐 때 호출할 함수 설정
